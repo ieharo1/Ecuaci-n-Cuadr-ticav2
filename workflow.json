@@ -1,0 +1,165 @@
+{
+  "name": "N8N REPORTE VENTAS - Generación Automática",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Trigger Semanal",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    DATE(fecha_venta) as fecha,\n    SUM(total) as ventas_totales,\n    COUNT(*) as numero_ventas,\n    AVG(total) as promedio_venta\nFROM ventas\nWHERE fecha_venta >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)\nGROUP BY DATE(fecha_venta)\nORDER BY fecha DESC",
+        "options": {}
+      },
+      "id": "query-sales",
+      "name": "Extraer Ventas MySQL",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "credentials": {
+        "mySql": "mysql-creds"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const salesData = $input.first().json;\n\nconst totalVentas = salesData.reduce((sum, row) => sum + row.ventas_totales, 0);\nconst totalOrdenes = salesData.reduce((sum, row) => sum + row.numero_ventas, 0);\nconst promedio = totalVentas / totalOrdenes;\n\nconst fechaInicio = salesData[salesData.length - 1]?.fecha || 'N/A';\nconst fechaFin = salesData[0]?.fecha || 'N/A';\n\nlet tablaHTML = '<table border=\"1\" style=\"border-collapse: collapse;\"><tr><th>Fecha</th><th>Ventas</th><th>Órdenes</th><th>Promedio</th></tr>';\nsalesData.forEach(row => {\n  tablaHTML += `<tr><td>${row.fecha}</td><td>$${row.ventas_totales}</td><td>${row.numero_ventas}</td><td>$${row.promedio_venta.toFixed(2)}</td></tr>`;\n});\ntablaHTML += '</table>';\n\nconst result = {\n  json: {\n    reporte_html: tablaHTML,\n    ventas_totales: totalVentas,\n    numero_ordenes: totalOrdenes,\n    promedio_venta: promedio,\n    fecha_inicio: fechaInicio,\n    fecha_fin: fechaFin,\n    datos_tabla: salesData\n  }\n};\n\nreturn result;"
+      },
+      "id": "format-report",
+      "name": "Formatear Reporte",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "sheetId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/TU_SHEET_ID"
+        },
+        "range": "A:E",
+        "columns": {
+          "FechaInicio": "={{ $json.fecha_inicio }}",
+          "FechaFin": "={{ $json.fecha_fin }}",
+          "VentasTotales": "={{ $json.ventas_totales }}",
+          "NumeroOrdenes": "={{ $json.numero_ordenes }}",
+          "PromedioVenta": "={{ $json.promedio_venta }}",
+          "FechaGeneracion": "={{ $now.toISO() }}"
+        },
+        "options": {}
+      },
+      "id": "save-sheets",
+      "name": "Guardar en Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [850, 300],
+      "credentials": {
+        "googleSheetsOAuth2": "google-sheets-creds"
+      }
+    },
+    {
+      "parameters": {
+        "to": "={{ $json.email_destino }}",
+        "subject": "📊 Reporte de Ventas Semanal - {{ $json.fecha_fin }}",
+        "html": "=📈 *Reporte de Ventas Semanal*\\n\\n*Período:* {{ $json.fecha_inicio }} al {{ $json.fecha_fin }}\\n\\n*Ventas Totales:* ${{ $json.ventas_totales }}\\n*Número de Órdenes:* {{ $json.numero_ordenes }}\\n*Promedio por Orden:* ${{ $json.promedio_venta.toFixed(2) }}\\n\\n{{ $json.reporte_html }}",
+        "options": {
+          "fromEmail": "={{ $json.email_remitente }}",
+          "fromName": "Sistema de Reportes"
+        }
+      },
+      "id": "send-email",
+      "name": "Enviar por Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "credentials": {
+        "gmailOAuth2": "gmail-creds"
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_chat_id }}",
+        "text": "=📊 *Reporte de Ventas Semanal*\\n\\nVentas Totales: ${{ $json.ventas_totales }}\\nÓrdenes: {{ $json.numero_ordenes }}\\nPromedio: ${{ $json.promedio_venta.toFixed(2) }}\\n\\nPeríodo: {{ $json.fecha_inicio }} - {{ $json.fecha_fin }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-notify",
+      "name": "Notificar Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1250, 300],
+      "credentials": {
+        "telegramApi": "telegram-creds"
+      }
+    }
+  ],
+  "connections": {
+    "Trigger Semanal": {
+      "main": [
+        [
+          {
+            "node": "Extraer Ventas MySQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Ventas MySQL": {
+      "main": [
+        [
+          {
+            "node": "Formatear Reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Reporte": {
+      "main": [
+        [
+          {
+            "node": "Guardar en Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en Sheets": {
+      "main": [
+        [
+          {
+            "node": "Enviar por Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notificar Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "reporte-ventas"
+}
